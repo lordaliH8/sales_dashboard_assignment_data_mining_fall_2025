@@ -40,9 +40,3 @@ This repository explores a sales dataset (`data/sales_data.csv`) to produce insi
 
 ![Net Profit vs Discount](web_dashboard/dashboard_visuals/Net%20Profit%20vs%20Discount.png)
 ![Web Dashboard Snapshot](web_dashboard/dashboard_visuals/Monthly%20Net%20Revenue.png)
-
-## Next Steps
-- Add forecasting/anomaly flags for the January spike and mid-year dip.
-- Calibrate discount guardrails by channel and customer type to protect margin.
-- Package aggregates into PowerBI/Chart.js/D3 for a final course-ready dashboard.
-
