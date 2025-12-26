@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sales Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.5/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-boxplot@4.3.2/build/Chart.BoxPlot.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,-apple-system,sans-serif;margin:24px;background:#f7f9fb;color:#0f172a}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(15,23,42,0.06)}
+.title{font-size:18px;margin:0 0 12px 0}
+canvas{width:100%;height:360px}
+#heatmap{width:100%;height:420px}
+@media(max-width:1024px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>Sales Dashboard (Chart.js + D3)</h1>
+<div class="grid">
+  <div class="card"><h2 class="title">Monthly Net Revenue</h2><canvas id="trend"></canvas></div>
+  <div class="card"><h2 class="title">Monthly Revenue Share by Region</h2><canvas id="regionShare"></canvas></div>
+  <div class="card"><h2 class="title">Revenue by Sales Rep and Region</h2><canvas id="repRegion"></canvas></div>
+  <div class="card"><h2 class="title">Net Revenue Distribution</h2><canvas id="hist"></canvas></div>
+  <div class="card"><h2 class="title">Net Revenue by Category (Box)</h2><canvas id="box"></canvas></div>
+  <div class="card"><h2 class="title">Net Profit vs Discount</h2><canvas id="scatter"></canvas></div>
+  <div class="card" style="grid-column:1/-1"><h2 class="title">Correlation Matrix</h2><div id="heatmap"></div></div>
+</div>
+<script>
+const filePath="/data/sales_data.csv";
+const fmtMonth=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+const boxplotLib=window.ChartBoxPlot||window["chartjs-chart-boxplot"]||{};
+const boxRegs=Object.values(boxplotLib).filter(v=>typeof v==="function");
+if(boxRegs.length){Chart.register(...boxRegs);}
+function corr(a,b){
+  const n=a.length;
+  if(!n) return 0;
+  const ma=a.reduce((s,v)=>s+v,0)/n;
+  const mb=b.reduce((s,v)=>s+v,0)/n;
+  let num=0,da=0,db=0;
+  for(let i=0;i<n;i++){
+    const x=a[i]-ma;
+    const y=b[i]-mb;
+    num+=x*y;
+    da+=x*x;
+    db+=y*y;
+  }
+  const denom=Math.sqrt(da*db);
+  return denom?num/denom:0;
+}
+function groupSum(keyFn,valFn,rows){const m=new Map();rows.forEach(r=>{const k=keyFn(r);m.set(k,(m.get(k)||0)+valFn(r));});return m;}
+function groupBy(keyFn,rows){const m=new Map();rows.forEach(r=>{const k=keyFn(r);if(!m.has(k))m.set(k,[]);m.get(k).push(r);});return m;}
+Papa.parse(filePath,{download:true,header:true,dynamicTyping:true,complete:res=>{const rows=res.data.filter(r=>r.Sale_Date);rows.forEach(r=>{const d=new Date(r.Sale_Date);r.Month=fmtMonth(d);r.Net_Revenue=r.Sales_Amount*(1-r.Discount);r.Gross_Margin=(r.Unit_Price-r.Unit_Cost)*r.Quantity_Sold;r.Net_Profit=r.Gross_Margin-(r.Sales_Amount-r.Net_Revenue);});
+const months=[...new Set(rows.map(r=>r.Month))].sort();const regions=[...new Set(rows.map(r=>r.Region))].sort();const reps=[...new Set(rows.map(r=>r.Sales_Rep))].sort();const categories=[...new Set(rows.map(r=>r.Product_Category))].sort();
+const monthlyMap=groupSum(r=>r.Month,r=>r.Net_Revenue,rows);const monthlyData=months.map(m=>monthlyMap.get(m)||0);
+const mrMap=groupBy(r=>r.Region,rows);const monthlyRegionDatas=regions.map(reg=>months.map(m=>groupSum(r=>r.Month,x=>x.Net_Revenue,mrMap.get(reg)).get(m)||0));
+const repRegionMap=groupBy(r=>r.Sales_Rep,rows);const repRegionDatas=regions.map(reg=>reps.map(rep=>groupSum(r=>r.Sales_Rep,x=>x.Net_Revenue,(repRegionMap.get(rep)||[]).filter(x=>x.Region===reg)).get(rep)||0));
+const netRevenue=rows.map(r=>r.Net_Revenue);
+const binCount=20;const maxNR=Math.max(...netRevenue);const minNR=Math.min(...netRevenue);const binSize=(maxNR-minNR)/binCount;const bins=new Array(binCount).fill(0);netRevenue.forEach(v=>{let idx=Math.floor((v-minNR)/binSize);if(idx===binCount)idx=binCount-1;bins[idx]++;});const binLabels=bins.map((_,i)=>`${(minNR+i*binSize).toFixed(0)}`);
+const boxData=categories.map(cat=>rows.filter(r=>r.Product_Category===cat).map(r=>r.Net_Revenue));
+const scatterData=rows.map(r=>({x:r.Discount,y:r.Net_Profit,c:r.Sales_Channel,t:r.Customer_Type}));
+const numCols=["Net_Revenue","Net_Profit","Quantity_Sold","Unit_Cost","Unit_Price","Discount"];const matrix=numCols.map(c1=>numCols.map(c2=>corr(rows.map(r=>r[c1]),rows.map(r=>r[c2]))));
+const palette=["#2563eb","#22c55e","#f97316","#a855f7","#ef4444","#0ea5e9","#94a3b8"];
+
+new Chart(document.getElementById("trend"),{
+  type:"line",
+  data:{
+    labels:months,
+    datasets:[{label:"Net Revenue",data:monthlyData,borderColor:palette[0],backgroundColor:palette[0],fill:false,tension:0.2,pointRadius:3}]
+  }
+});
+
+new Chart(document.getElementById("regionShare"),{
+  type:"line",
+  data:{
+    labels:months,
+    datasets:regions.map((reg,i)=>({
+      label:reg,
+      data:monthlyRegionDatas[i],
+      borderColor:palette[i%palette.length],
+      backgroundColor:palette[i%palette.length]+"55",
+      fill:true,
+      stack:"rev"
+    }))
+  },
+  options:{scales:{y:{stacked:true},x:{stacked:true}}}
+});
+
+new Chart(document.getElementById("repRegion"),{
+  type:"bar",
+  data:{
+    labels:reps,
+    datasets:regions.map((reg,i)=>({
+      label:reg,
+      data:repRegionDatas[i],
+      backgroundColor:palette[i%palette.length]
+    }))
+  },
+  options:{indexAxis:"y",scales:{x:{stacked:true},y:{stacked:true}}}
+});
+
+new Chart(document.getElementById("hist"),{
+  type:"bar",
+  data:{
+    labels:binLabels,
+    datasets:[{label:"Count",data:bins,backgroundColor:palette[1]}]
+  },
+  options:{scales:{x:{ticks:{maxRotation:0,minRotation:0}}}}
+});
+
+try{
+  new Chart(document.getElementById("box"),{
+    type:"boxplot",
+    data:{
+      labels:categories,
+      datasets:[{label:"Net Revenue",data:boxData,backgroundColor:palette[2]+"55",borderColor:palette[2]}]
+    }
+  });
+}catch(e){console.error("boxplot error",e);}
+
+try{
+  new Chart(document.getElementById("scatter"),{
+    type:"scatter",
+    data:{
+      datasets:scatterData.reduce((acc,p)=>{
+        const key=`${p.c}-${p.t}`;
+        let ds=acc.find(d=>d.label===key);
+        if(!ds){
+          ds={label:key,data:[],backgroundColor:palette[acc.length%palette.length],pointStyle:p.t==="New"?"triangle":"circle"};
+          acc.push(ds);
+        }
+        ds.data.push({x:p.x,y:p.y});
+        return acc;
+      },[])
+    },
+    options:{scales:{x:{title:{display:true,text:"Discount"}},y:{title:{display:true,text:"Net Profit"}}}}
+  });
+}catch(e){console.error("scatter error",e);}
+const heatSize=420;
+const margin=40;
+const cellSize=(heatSize-margin*2)/numCols.length;
+const svg=d3.select("#heatmap").append("svg").attr("width",heatSize).attr("height",heatSize);
+const g=svg.append("g").attr("transform",`translate(${margin},${margin})`);
+const color=d3.scaleSequential(d3.interpolateRdBu).domain([1,-1]);
+const flat=matrix.flatMap((row,i)=>row.map((v,j)=>({v,i,j})));
+g.selectAll("rect")
+ .data(flat)
+ .enter()
+ .append("rect")
+ .attr("x",d=>d.j*cellSize)
+ .attr("y",d=>d.i*cellSize)
+ .attr("width",cellSize)
+ .attr("height",cellSize)
+ .attr("fill",d=>color(d.v));
+g.selectAll("text.val")
+ .data(flat)
+ .enter()
+ .append("text")
+ .attr("class","val")
+ .attr("x",d=>d.j*cellSize+cellSize/2)
+ .attr("y",d=>d.i*cellSize+cellSize/2+4)
+ .attr("text-anchor","middle")
+ .attr("fill","#0f172a")
+ .attr("font-size","12px")
+ .text(d=>d.v.toFixed(2));
+g.selectAll("text.row")
+ .data(numCols)
+ .enter()
+ .append("text")
+ .attr("class","row")
+ .attr("x",-8)
+ .attr("y",(d,i)=>i*cellSize+cellSize/2+4)
+ .attr("text-anchor","end")
+ .text(d=>d);
+g.selectAll("text.col")
+ .data(numCols)
+ .enter()
+ .append("text")
+ .attr("class","col")
+ .attr("transform",(d,i)=>`translate(${i*cellSize+cellSize/2},-6) rotate(-45)`)
+ .attr("text-anchor","end")
+ .text(d=>d);
+}});
+</script>
+</body>
+</html>
